@@ -3,7 +3,7 @@ FROM ubuntu:20.04
 
 USER root
 WORKDIR /root
-COPY assets docker_ap/assets
+COPY docker_ap/assets /assets
 
 
 RUN DEBIAN_FRONTEND=noninteractive apt-get -y update && \
