@@ -1,0 +1,40 @@
+bert-extractive-summarizer
+bigartm10
+blosc  # pandas?
+bottleneck  # pandas?
+cherrypy  # server?
+cython
+datasketch
+##deeppavlov
+fastapi  # server?
+fasttext
+fuzzywuzzy[speedup]
+gunicorn  # server?
+ipymarkup
+itsdangerous  # server?
+jinja2  # server?
+matplotlib
+navec
+numexpr  # pandas?
+numba  # pandas?
+numpy~=1.19.5  # https://github.com/tensorflow/tensorflow/issues/47691
+pandas
+/assets/pullenti-4.10-py3-none-any.whl  # формировал вручную
+pullenti-client
+pymorphy2-dicts-ru==2.4.417127.4579844  # API часто меняется
+pymorphy2[fast]~=0.9.1  # API часто меняется
+pymssql
+pynndescent
+python-dotenv
+python-levenshtein
+razdel
+##rake-nltk  # см. Dockerfile
+requests
+scikit-learn
+scipy
+spacy
+starlette[full]  # server?
+sqlalchemy  # ?
+https://download.pytorch.org/whl/cu111/torch-1.8.1%2Bcu111-cp38-cp38-linux_x86_64.whl
+tqdm
+transformers

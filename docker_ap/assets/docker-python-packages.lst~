@@ -1,0 +1,184 @@
+import sys
+import pickle
+import razdel
+import numpy as np
+import torch
+import tqdm.auto
+import re
+
+from roles_base_task import RolesBaseTask
+from lib import get_ids_from_argument, get_db_connection, get_texts, text_preprocessing, morph
+
+
+class RolesTask(RolesBaseTask):
+
+    def _extract_roles_via_rules(self, text,
+                                 preprocessed_text, spans, attributes, spans_to_attributes):
+        roles = []
+
+        sentences = [ el.text for el in razdel.sentenize(preprocessed_text) ]
+
+        for _i, _span in enumerate(spans):
+            _start, _stop, _tag = _span
+            if _tag != 'PERSON':
+                continue
+            _span_text = preprocessed_text[_start:_stop]
+
+            _role = None
+
+            if _span_text.lower() in sentences[0].lower():
+                _role = 'получатель'
+            if _span_text.lower() in sentences[-1].lower():
+                _role = 'отправитель'
+
+            if re.search(r'\bя,?\s*'+re.escape(_span_text), ' '.join(sentences[:3]), flags=re.I) is not None:
+                _role = 'отправитель'
+
+            if re.search(r'\bменя зовут\s*'+re.escape(_span_text), ' '.join(sentences[:3]), flags=re.I) is not None:
+                _role = 'отправитель'
+
+            if re.search(r'\bс уважеием,?\s*'+re.escape(_span_text), ' '.join(sentences[:3]), flags=re.I) is not None:
+                _role = 'отправитель'
+
+            if re.search(r'\bзаранее благодарен,?\s*'+re.escape(_span_text), ' '.join(sentences[:3]), flags=re.I) is not None:
+                _role = 'отправитель'
+
+            if re.search(r'\bк вам обращается\s*'+re.escape(_span_text), ' '.join(sentences[:3]), flags=re.I) is not None:
+                _role = 'отправитель'
+
+
+            if re.search(r'\bуважаемый\s*'+re.escape(_span_text), ' '.join(sentences[:3]), flags=re.I) is not None:
+                _role = 'получатель'
+
+            if re.search(r'\bув.,?\s*'+re.escape(_span_text), ' '.join(sentences[:3]), flags=re.I) is not None:
+                _role = 'получатель'
+
+            if re.search(r'\bдобрый день\s*'+re.escape(_span_text), ' '.join(sentences[:3]), flags=re.I) is not None:
+                _role = 'получатель'
+
+            if re.search(r'\bдоброго здоровья\s*'+re.escape(_span_text), ' '.join(sentences[:3]), flags=re.I) is not None:
+                _role = 'получатель'
+
+            if _role is None:
+                continue
+
+            _attributes = attributes[ spans_to_attributes[_i] ]
+
+            _item = (_role, _attributes)
+            roles.append(_item)
+
+        return roles
+
+
+    def _extract_roles_via_nn(self, text,
+                              preprocessed_text, spans):
+        sequence_length = 350
+
+        result = []
+
+        self.load_model()
+
+        tokens = list(razdel.tokenize(preprocessed_text))
+        targets_sequence = [ self.tokens_le.get(morph.parse(token.text)[0].normal_form, 0) for token in tokens ]
+        X = np.vstack([ np.pad(targets_sequence, (0, sequence_length))[:sequence_length] ])
+
+        self.model.eval()
+        with torch.no_grad():
+            X = torch.as_tensor(X, device=self.device)
+            outputs = self.model(X)
+            predicted = torch.argmax(outputs.data, axis=-1)
+
+        predicted_item = predicted.cpu().numpy()[0, :]
+
+        print(self.LABELS)
+
+        i = 0
+        for _span in spans:
+            _start, _stop, _ = _span
+
+            _predictions = np.zeros(len(self.LABELS), dtype=np.uint)
+
+            while tokens[i].start < _start:
+                i += 1
+
+            while tokens[i].stop < _stop:
+                _predictions[ predicted_item[i] ] += 1
+                i += 1
+            _predictions[ predicted_item[i] ] += 1
+
+            _predictions[0] = 0  # padding
+            _predictions[1] = 0  # no-NER class
+            _prediction = _predictions.argmax()
+
+            if _prediction >= 2:
+                _item = (
+                    self.LABELS[_prediction],
+                    { 'text': preprocessed_text[_start:_stop] }
+                )
+                result.append(_item)
+
+        return result
+
+
+    def extract_roles_from_text(self, text,
+                               preprocessed_text, spans, attributes, spans_to_attributes, children):
+        if text is None:
+            return None
+
+        _preprocessed_text = text_preprocessing(text)
+        if preprocessed_text != _preprocessed_text:
+            raise RuntimeError('разная предобработка текста!')
+
+        roles_via_rules = self._extract_roles_via_rules(
+            text,
+            preprocessed_text=preprocessed_text, spans=spans, attributes=attributes, spans_to_attributes=spans_to_attributes
+        )
+
+        roles_via_nn = self._extract_roles_via_nn(
+            text,
+            preprocessed_text=preprocessed_text, spans=spans
+        )
+
+        roles = roles_via_rules + roles_via_nn
+        result = {
+            'preprocessed_text': preprocessed_text,
+            'roles': roles_via_nn
+        }
+
+        return result
+
+
+    def extract_roles_from_texts(self, texts, text_kwargs):
+        result = [
+            self.extract_roles_from_text(_text, **_text_kwargs) \
+            for _text, _text_kwargs in zip(tqdm.auto.tqdm(texts, desc='Извлечение ролей'), text_kwargs)
+        ]
+
+        return result
+
+
+def main(roles_model_path, text_ids, entities_result_file_path):
+    conn = get_db_connection()
+
+    texts = get_texts(conn, text_ids)
+
+    task = RolesTask()
+    task.init(roles_model_path)
+
+    with open(entities_result_file_path, 'rb') as _f:
+        entities_results = pickle.load(_f)
+    text_kwargs = [ entities_results[_text_id] for _text_id in text_ids ]
+    result = task.extract_roles_from_texts(texts, text_kwargs)
+    print(dict(zip(text_ids, result)))
+
+    task.deinit()
+
+    conn.close()
+
+
+if __name__ == '__main__':
+    roles_model_path = sys.argv[1]
+    text_ids = get_ids_from_argument(sys.argv[2])
+    entities_result_file_path = sys.argv[3]
+
+    main(roles_model_path, text_ids, entities_result_file_path)
